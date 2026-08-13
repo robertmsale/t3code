@@ -23,6 +23,10 @@ Supervised.
 **Full access**: allow commands and edits without prompts. The default. The agent runs
 unattended until it finishes or asks a question of its own.
 
+**Codex config**: available on Codex threads. T3 Code leaves the approval policy, sandbox, and
+approval reviewer unset so Codex can use the permissions configured for that Codex installation.
+This includes its configured default permission profile and any managed policy restrictions.
+
 Approvals appear inline in the conversation. Approve or reject one and the agent continues from
 there.
 
@@ -42,7 +46,7 @@ Each provider maps these modes onto its own approval and sandbox settings. Codex
 translates the mode into its approval policy and sandbox level, so **Supervised** runs the CLI
 with prompting enabled and a restricted workspace while **Full access** disables both. The
 labels above describe what you get; the exact per-provider translation is internal and may
-change.
+change. Choose **Codex config** when Codex's own configured permissions should remain authoritative.
 
-Mobile offers the same four modes. It labels the first one **Approve actions** rather than
-**Supervised**.
+Mobile offers the same modes, including **Codex config** for Codex. It labels **Supervised** as
+**Approve actions**.

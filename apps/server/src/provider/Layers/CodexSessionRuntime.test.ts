@@ -244,6 +244,26 @@ describe("buildTurnStartParams", () => {
       ],
     });
   });
+
+  it.effect("leaves Codex config to provide turn permissions", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "codex-config",
+        prompt: "Use the configured permissions",
+      });
+
+      NodeAssert.deepStrictEqual(params, {
+        threadId: "provider-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Use the configured permissions",
+          },
+        ],
+      });
+    }),
+  );
 });
 
 describe("buildCodexDeveloperInstructions", () => {
@@ -393,12 +413,80 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it.effect("leaves Codex config to provide permissions on thread start", () =>
+    Effect.gen(function* () {
+      let payload: CodexRpc.ClientRequestParamsByMethod["thread/start"] | undefined;
+      const client = {
+        request: <M extends "thread/fork" | "thread/start" | "thread/resume">(
+          method: M,
+          requestPayload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          NodeAssert.equal(method, "thread/start");
+          payload = requestPayload as CodexRpc.ClientRequestParamsByMethod["thread/start"];
+          return Effect.succeed(
+            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],
+          );
+        },
+      };
+
+      yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "codex-config",
+        cwd: "/tmp/project",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+      });
+
+      NodeAssert.deepStrictEqual(payload, {
+        cwd: "/tmp/project",
+      });
+    }),
+  );
+
+  it.effect("forks resumed history without carrying forward T3 permission overrides", () =>
+    Effect.gen(function* () {
+      let payload: CodexRpc.ClientRequestParamsByMethod["thread/fork"] | undefined;
+      const client = {
+        request: <M extends "thread/fork" | "thread/start" | "thread/resume">(
+          method: M,
+          requestPayload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          NodeAssert.equal(method, "thread/fork");
+          payload = requestPayload as CodexRpc.ClientRequestParamsByMethod["thread/fork"];
+          return Effect.succeed(
+            makeThreadOpenResponse("resumed-thread") as CodexRpc.ClientRequestResponsesByMethod[M],
+          );
+        },
+      };
+
+      yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "codex-config",
+        cwd: "/tmp/project",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        resumeThreadId: "existing-thread",
+      });
+
+      NodeAssert.deepStrictEqual(payload, {
+        threadId: "existing-thread",
+        cwd: "/tmp/project",
+      });
+    }),
+  );
+
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
-      const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+      const calls: Array<{
+        method: "thread/fork" | "thread/start" | "thread/resume";
+        payload: unknown;
+      }> = [];
       const started = makeThreadOpenResponse("fresh-thread");
       const client = {
-        request: <M extends "thread/start" | "thread/resume">(
+        request: <M extends "thread/fork" | "thread/start" | "thread/resume">(
           method: M,
           payload: CodexRpc.ClientRequestParamsByMethod[M],
         ) => {
@@ -436,7 +524,7 @@ describe("openCodexThread", () => {
   it.effect("propagates non-recoverable resume failures", () =>
     Effect.gen(function* () {
       const client = {
-        request: <M extends "thread/start" | "thread/resume">(
+        request: <M extends "thread/fork" | "thread/start" | "thread/resume">(
           method: M,
           _payload: CodexRpc.ClientRequestParamsByMethod[M],
         ) => {

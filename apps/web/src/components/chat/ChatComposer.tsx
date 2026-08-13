@@ -251,6 +251,11 @@ const runtimeModeConfig: Record<
     description: "Allow commands and edits without prompts.",
     icon: LockOpenIcon,
   },
+  "codex-config": {
+    label: "Codex config",
+    description: "Use Codex's configured approval and sandbox permissions.",
+    icon: LockOpenIcon,
+  },
 };
 
 const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
@@ -298,11 +303,16 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
+  selectedProvider: ProviderDriverKind;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
+  const visibleRuntimeModeOptions = runtimeModeOptions.filter(
+    (mode) =>
+      mode !== "codex-config" || props.selectedProvider === "codex" || props.runtimeMode === mode,
+  );
   const interactionModeTooltip =
     props.interactionMode === "plan"
       ? "Plan mode — click to return to normal build mode"
@@ -357,7 +367,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             <SelectValue>{runtimeModeOption.label}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
-            {runtimeModeOptions.map((mode) => {
+            {visibleRuntimeModeOptions.map((mode) => {
               const option = runtimeModeConfig[mode];
               const OptionIcon = option.icon;
               return (
@@ -831,6 +841,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // disabled.
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
+
+  // A Codex-config runtime mode is meaningful only to Codex. If the user
+  // switches an unsaved composer draft from Codex to another provider, do not
+  // carry that provider-specific mode into the next turn. Keep an already
+  // persisted value visible on first render so old threads remain readable.
+  const previousSelectedProviderRef = useRef<ProviderDriverKind | null>(null);
+  useEffect(() => {
+    const previous = previousSelectedProviderRef.current;
+    previousSelectedProviderRef.current = selectedProvider;
+    if (previous === "codex" && selectedProvider !== "codex" && runtimeMode === "codex-config") {
+      handleRuntimeModeChange("full-access");
+    }
+  }, [handleRuntimeModeChange, runtimeMode, selectedProvider]);
 
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,
@@ -3150,6 +3173,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <CompactComposerControlsMenu
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
+                    selectedProvider={selectedProvider}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
@@ -3167,6 +3191,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       interactionMode={interactionMode}
                       runtimeMode={runtimeMode}
+                      selectedProvider={selectedProvider}
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />

@@ -644,9 +644,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             selectedModel: currentModelSelection,
             optionDescriptors: providerOptionDescriptors,
             runtimeMode: currentRuntimeMode,
+            providerDriver: currentModelOption?.providerDriver,
           })
         : null,
-    [threadProviderGroups, currentModelSelection, providerOptionDescriptors, currentRuntimeMode],
+    [
+      threadProviderGroups,
+      currentModelSelection,
+      providerOptionDescriptors,
+      currentRuntimeMode,
+      currentModelOption?.providerDriver,
+    ],
   );
 
   const onUpdateModelSelection = props.onUpdateModelSelection;

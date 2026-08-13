@@ -121,6 +121,7 @@ export const RuntimeMode = Schema.Literals([
   "auto-accept-edits",
   "auto",
   "full-access",
+  "codex-config",
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";

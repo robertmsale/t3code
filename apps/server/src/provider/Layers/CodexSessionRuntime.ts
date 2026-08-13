@@ -262,11 +262,9 @@ function readResumeCursorThreadId(
 }
 
 function runtimeModeToThreadConfig(input: RuntimeMode): {
-  readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
-  readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
-  // Always explicit: omitting the field on resume keeps the thread's previous
-  // reviewer, which would leave auto_review sticky after switching modes.
-  readonly approvalsReviewer: EffectCodexSchema.V2ThreadStartParams__ApprovalsReviewer;
+  readonly approvalPolicy?: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
+  readonly sandbox?: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
+  readonly approvalsReviewer?: EffectCodexSchema.V2ThreadStartParams__ApprovalsReviewer;
 } {
   switch (input) {
     case "approval-required":
@@ -288,12 +286,13 @@ function runtimeModeToThreadConfig(input: RuntimeMode): {
         approvalsReviewer: "auto_review",
       };
     case "full-access":
-    default:
       return {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       };
+    case "codex-config":
+      return {};
   }
 }
 
@@ -306,9 +305,9 @@ function buildThreadStartParams(input: {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
-    approvalPolicy: config.approvalPolicy,
-    sandbox: config.sandbox,
-    approvalsReviewer: config.approvalsReviewer,
+    ...(config.approvalPolicy ? { approvalPolicy: config.approvalPolicy } : {}),
+    ...(config.sandbox ? { sandbox: config.sandbox } : {}),
+    ...(config.approvalsReviewer ? { approvalsReviewer: config.approvalsReviewer } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
   };
@@ -316,7 +315,7 @@ function buildThreadStartParams(input: {
 
 function runtimeModeToTurnSandboxPolicy(
   input: RuntimeMode,
-): EffectCodexSchema.V2TurnStartParams__SandboxPolicy {
+): EffectCodexSchema.V2TurnStartParams__SandboxPolicy | undefined {
   switch (input) {
     case "approval-required":
       return {
@@ -328,10 +327,11 @@ function runtimeModeToTurnSandboxPolicy(
         type: "workspaceWrite",
       };
     case "full-access":
-    default:
       return {
         type: "dangerFullAccess",
       };
+    case "codex-config":
+      return undefined;
   }
 }
 
@@ -386,6 +386,7 @@ export function buildTurnStartParams(input: {
   }
 
   const config = runtimeModeToThreadConfig(input.runtimeMode);
+  const sandboxPolicy = runtimeModeToTurnSandboxPolicy(input.runtimeMode);
   const collaborationMode = buildCodexCollaborationMode({
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -395,9 +396,9 @@ export function buildTurnStartParams(input: {
   return decodeCodexTurnStartParamsWithCollaborationMode({
     threadId: input.threadId,
     input: turnInput,
-    approvalPolicy: config.approvalPolicy,
-    approvalsReviewer: config.approvalsReviewer,
-    sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode),
+    ...(config.approvalPolicy ? { approvalPolicy: config.approvalPolicy } : {}),
+    ...(config.approvalsReviewer ? { approvalsReviewer: config.approvalsReviewer } : {}),
+    ...(sandboxPolicy ? { sandboxPolicy } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
@@ -442,10 +443,11 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
 }
 
 type CodexThreadOpenResponse =
+  | CodexRpc.ClientRequestResponsesByMethod["thread/fork"]
   | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
   | CodexRpc.ClientRequestResponsesByMethod["thread/resume"];
 
-type CodexThreadOpenMethod = "thread/start" | "thread/resume";
+type CodexThreadOpenMethod = "thread/fork" | "thread/start" | "thread/resume";
 
 interface CodexThreadOpenClient {
   readonly request: <M extends CodexThreadOpenMethod>(
@@ -473,6 +475,30 @@ export const openCodexThread = (input: {
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
+  }
+
+  // Codex restores approvalsReviewer from a resumed thread's history when the
+  // field is omitted. Forking retains the conversation while loading the
+  // current Codex configuration, so inherited mode cannot revive a permission
+  // override that T3 sent on an earlier turn.
+  if (input.runtimeMode === "codex-config") {
+    const forkParams: CodexRpc.ClientRequestParamsByMethod["thread/fork"] = {
+      threadId: resumeThreadId,
+      cwd: input.cwd,
+      ...(startParams.model ? { model: startParams.model } : {}),
+      ...(startParams.serviceTier ? { serviceTier: startParams.serviceTier } : {}),
+    };
+    return input.client.request("thread/fork", forkParams).pipe(
+      Effect.catchIf(isRecoverableThreadResumeError, (error) =>
+        Effect.logWarning("codex app-server thread fork fell back to fresh start", {
+          threadId: input.threadId,
+          requestedRuntimeMode: input.runtimeMode,
+          resumeThreadId,
+          recoverable: true,
+          cause: error,
+        }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
+      ),
+    );
   }
 
   return input.client

@@ -25,7 +25,34 @@ export const RUNTIME_MODE_CHOICES: ReadonlyArray<{
   { mode: "auto-accept-edits", label: "Auto-accept edits", shortLabel: "Edits" },
   { mode: "auto", label: "Auto", shortLabel: "Auto" },
   { mode: "full-access", label: "Full access", shortLabel: "Full" },
+  {
+    mode: "codex-config",
+    label: "Codex config",
+    shortLabel: "Codex config",
+  },
 ];
+
+/**
+ * Return runtime choices supported by the selected provider. A persisted
+ * Codex-config value remains visible if stale state is ever loaded on a
+ * non-Codex thread so the current setting is never rendered without a label.
+ */
+export function runtimeModeChoicesForProvider(
+  providerDriver: string | undefined,
+  currentMode: RuntimeMode,
+): ReadonlyArray<(typeof RUNTIME_MODE_CHOICES)[number]> {
+  return RUNTIME_MODE_CHOICES.filter(
+    (choice) =>
+      choice.mode !== "codex-config" || providerDriver === "codex" || currentMode === choice.mode,
+  );
+}
+
+export function runtimeModeForProvider(
+  providerDriver: string | undefined,
+  currentMode: RuntimeMode,
+): RuntimeMode {
+  return currentMode === "codex-config" && providerDriver !== "codex" ? "full-access" : currentMode;
+}
 
 export function selectableChoices(
   descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
@@ -63,6 +90,8 @@ export function buildThreadSettingsMenu(input: {
   readonly selectedModel: ModelSelection | null;
   readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly runtimeMode: RuntimeMode;
+  /** Driver for the currently selected model (used for provider-specific modes). */
+  readonly providerDriver?: string;
 }): ThreadSettingsMenu {
   const events = new Map<string, ThreadSettingsMenuEvent>();
   const actions: MenuAction[] = [];
@@ -180,14 +209,19 @@ export function buildThreadSettingsMenu(input: {
     });
   }
 
-  const runtimeLabel = RUNTIME_MODE_CHOICES.find(
-    (choice) => choice.mode === input.runtimeMode,
-  )?.label;
+  const selectedModelOption = input.providerGroups
+    .flatMap((group) => group.models)
+    .find(isSelected);
+  const runtimeChoices = runtimeModeChoicesForProvider(
+    input.providerDriver ?? selectedModelOption?.providerDriver,
+    input.runtimeMode,
+  );
+  const runtimeLabel = runtimeChoices.find((choice) => choice.mode === input.runtimeMode)?.label;
   actions.push({
     id: "runtime",
     title: "Runtime",
     ...(runtimeLabel === undefined ? {} : { subtitle: runtimeLabel }),
-    subactions: RUNTIME_MODE_CHOICES.map((choice): MenuAction => {
+    subactions: runtimeChoices.map((choice): MenuAction => {
       const id = `runtime:${choice.mode}`;
       events.set(id, { type: "set-runtime", mode: choice.mode });
       return {

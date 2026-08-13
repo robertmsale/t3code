@@ -30,7 +30,12 @@ import { cn } from "../../lib/cn";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-menu";
+import {
+  RUNTIME_MODE_CHOICES,
+  runtimeModeForProvider,
+  runtimeModeChoicesForProvider,
+  selectableChoices,
+} from "./thread-settings-menu";
 import { pendingModelAfterPress } from "./thread-settings-sheet-state";
 import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet-presentation";
 
@@ -292,6 +297,7 @@ export function ThreadSettingsSheet(props: {
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
   const [expandedProviders, setExpandedProviders] = useState<ReadonlySet<string>>(() => new Set());
   const [pendingModel, setPendingModel] = useState<ModelOption | null>(null);
+  const [pendingRuntimeMode, setPendingRuntimeMode] = useState<RuntimeMode>(props.runtimeMode);
   const [submenu, setSubmenu] = useState<SubmenuPage | null>(null);
   const wasPresentedRef = useRef(false);
   const notifyDismissed = useCallback(() => {
@@ -311,13 +317,14 @@ export function ThreadSettingsSheet(props: {
       setShowLegacyToggle(false);
       setExpandedProviders(new Set());
       setPendingModel(null);
+      setPendingRuntimeMode(props.runtimeMode);
       setSubmenu(null);
     } else if (Platform.OS === "android" && wasPresentedRef.current) {
       // React Native only emits Modal.onDismiss on iOS. Android uses no exit
       // animation below, so the post-commit effect is its dismissal boundary.
       notifyDismissed();
     }
-  }, [notifyDismissed, props.visible]);
+  }, [notifyDismissed, props.runtimeMode, props.visible]);
 
   const isApplied = (option: ModelOption) =>
     option.selection.instanceId === props.selectedModel?.instanceId &&
@@ -337,6 +344,14 @@ export function ThreadSettingsSheet(props: {
         })
       : []
     : props.optionDescriptors;
+  const displayedProviderDriver =
+    pendingModel?.providerDriver ??
+    props.providerGroups.flatMap((group) => group.models).find((model) => isDisplayed(model))
+      ?.providerDriver;
+  const displayedRuntimeChoices = runtimeModeChoicesForProvider(
+    displayedProviderDriver,
+    pendingRuntimeMode,
+  );
 
   const hasLegacyModels = props.providerGroups.some((group) =>
     group.models.some((model) => model.isLegacy),
@@ -378,6 +393,10 @@ export function ThreadSettingsSheet(props: {
   })();
 
   const handleSave = () => {
+    const nextRuntimeMode = runtimeModeForProvider(displayedProviderDriver, pendingRuntimeMode);
+    if (nextRuntimeMode !== props.runtimeMode) {
+      props.onUpdateRuntimeMode(nextRuntimeMode);
+    }
     if (pendingModel) {
       void Haptics.selectionAsync();
       props.onSelectModel(pendingModel);
@@ -421,13 +440,13 @@ export function ThreadSettingsSheet(props: {
     submenu?.kind === "runtime"
       ? {
           title: "Runtime",
-          rows: RUNTIME_MODE_CHOICES.map((choice) => ({
+          rows: displayedRuntimeChoices.map((choice) => ({
             id: choice.mode,
             label: choice.label,
-            selected: choice.mode === props.runtimeMode,
+            selected: choice.mode === pendingRuntimeMode,
             onPress: () => {
               void Haptics.selectionAsync();
-              props.onUpdateRuntimeMode(choice.mode);
+              setPendingRuntimeMode(choice.mode);
               setSubmenu(null);
             },
           })),
@@ -591,7 +610,7 @@ export function ThreadSettingsSheet(props: {
             <DisclosureRow
               label="Runtime"
               value={
-                RUNTIME_MODE_CHOICES.find((choice) => choice.mode === props.runtimeMode)?.label
+                displayedRuntimeChoices.find((choice) => choice.mode === pendingRuntimeMode)?.label
               }
               onPress={() => setSubmenu({ kind: "runtime" })}
             />

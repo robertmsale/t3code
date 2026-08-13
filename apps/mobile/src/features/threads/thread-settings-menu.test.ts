@@ -3,7 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderInstanceId, type ProviderOptionDescriptor } from "@t3tools/contracts";
 
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
-import { buildThreadSettingsMenu, type ThreadSettingsMenuEvent } from "./thread-settings-menu";
+import {
+  buildThreadSettingsMenu,
+  runtimeModeForProvider,
+  runtimeModeChoicesForProvider,
+  type ThreadSettingsMenuEvent,
+} from "./thread-settings-menu";
 
 function modelOption(
   model: string,
@@ -81,6 +86,21 @@ function eventFor(menu: ReturnType<typeof buildThreadSettingsMenu>, id: string |
 }
 
 describe("buildThreadSettingsMenu", () => {
+  it("only offers Codex config for Codex providers", () => {
+    expect(
+      runtimeModeChoicesForProvider("codex", "full-access").map((choice) => choice.mode),
+    ).toContain("codex-config");
+    expect(
+      runtimeModeChoicesForProvider("claudeAgent", "full-access").map((choice) => choice.mode),
+    ).not.toContain("codex-config");
+  });
+
+  it("resets Codex config when a draft switches to another provider", () => {
+    expect(runtimeModeForProvider("codex", "codex-config")).toBe("codex-config");
+    expect(runtimeModeForProvider("claudeAgent", "codex-config")).toBe("full-access");
+    expect(runtimeModeForProvider("claudeAgent", "approval-required")).toBe("approval-required");
+  });
+
   it("orders the top level as model, options, runtime", () => {
     const menu = buildThreadSettingsMenu(baseInput());
 
