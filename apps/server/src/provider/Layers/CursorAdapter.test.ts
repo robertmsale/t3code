@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { describe } from "vite-plus/test";
 import { createModelSelection } from "@t3tools/shared/model";
 
 import {
@@ -28,7 +29,11 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
-import { makeCursorAdapter } from "./CursorAdapter.ts";
+import {
+  ACP_AUTO_REVIEW_MODE_ALIASES,
+  makeCursorAdapter,
+  resolveRequestedModeId,
+} from "./CursorAdapter.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CursorAdapter`.
@@ -113,6 +118,20 @@ async function waitForFileContent(filePath: string, attempts = 40) {
   throw new Error(`Timed out waiting for file content at ${filePath}`);
 }
 
+function lastSetModeId(requests: ReadonlyArray<Record<string, unknown>>): string | undefined {
+  const modeRequest = requests
+    .toReversed()
+    .find(
+      (entry) =>
+        entry.method === "session/set_mode" ||
+        (entry.method === "session/set_config_option" &&
+          (entry.params as Record<string, unknown> | undefined)?.configId === "mode"),
+    );
+  const params = modeRequest?.params as Record<string, unknown> | undefined;
+  const modeId = params?.modeId ?? params?.value;
+  return typeof modeId === "string" ? modeId : undefined;
+}
+
 function waitForJsonLogMatch(
   filePath: string,
   predicate: (entry: Record<string, unknown>) => boolean,
@@ -146,6 +165,98 @@ const makeResolveCursorSettings = Effect.gen(function* () {
       Effect.orDie,
     ),
   );
+});
+
+const cursorAcpModesWithAutoReview = [
+  { id: "ask", name: "Ask" },
+  { id: "architect", name: "Architect" },
+  { id: "auto-review", name: "Auto-review" },
+  { id: "code", name: "Code" },
+] as const;
+
+const cursorAcpModesWithoutAutoReview = [
+  { id: "ask", name: "Ask" },
+  { id: "architect", name: "Architect" },
+  { id: "code", name: "Code" },
+] as const;
+
+describe("resolveRequestedModeId", () => {
+  it("uses the documented Cursor CLI approvalMode alias for auto-review", () => {
+    assert.deepStrictEqual([...ACP_AUTO_REVIEW_MODE_ALIASES], ["auto-review"]);
+  });
+
+  it("maps runtimeMode auto to advertised auto-review, not ask or code", () => {
+    assert.equal(
+      resolveRequestedModeId({
+        interactionMode: undefined,
+        runtimeMode: "auto",
+        modeState: {
+          currentModeId: "ask",
+          availableModes: cursorAcpModesWithAutoReview,
+        },
+      }),
+      "auto-review",
+    );
+  });
+
+  it("fails closed when auto-review is not an advertised ACP mode", () => {
+    assert.equal(
+      resolveRequestedModeId({
+        interactionMode: undefined,
+        runtimeMode: "auto",
+        modeState: {
+          currentModeId: "ask",
+          availableModes: cursorAcpModesWithoutAutoReview,
+        },
+      }),
+      undefined,
+    );
+  });
+
+  it("keeps approval-required, auto-accept-edits, and full-access on distinct ACP modes", () => {
+    const modeState = {
+      currentModeId: "ask",
+      availableModes: cursorAcpModesWithAutoReview,
+    };
+    assert.equal(
+      resolveRequestedModeId({
+        interactionMode: undefined,
+        runtimeMode: "approval-required",
+        modeState,
+      }),
+      "ask",
+    );
+    assert.equal(
+      resolveRequestedModeId({
+        interactionMode: undefined,
+        runtimeMode: "auto-accept-edits",
+        modeState,
+      }),
+      "code",
+    );
+    assert.equal(
+      resolveRequestedModeId({
+        interactionMode: undefined,
+        runtimeMode: "full-access",
+        modeState,
+      }),
+      "code",
+    );
+  });
+
+  it("still prefers plan interaction over auto-review", () => {
+    assert.equal(
+      resolveRequestedModeId({
+        interactionMode: "plan",
+        runtimeMode: "auto",
+        modeState: {
+          currentModeId: "ask",
+          availableModes: cursorAcpModesWithAutoReview,
+        },
+      }),
+      "architect",
+    );
+  });
 });
 
 const cursorAdapterTestLayer = it.layer(
@@ -479,6 +590,80 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             (modeRequest?.params as Record<string, unknown> | undefined)?.value,
         ),
       );
+    }),
+  );
+
+  it.effect("maps runtimeMode auto onto the ACP auto-review session mode", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-auto-review-mode-probe");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const argvLogPath = NodePath.join(tempDir, "argv.txt");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "auto",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.equal(lastSetModeId(requests), "auto-review");
+    }),
+  );
+
+  it.effect("keeps approval-required on ask and full-access on code, not auto-review", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-")),
+      );
+
+      const startWithMode = (threadId: string, runtimeMode: "approval-required" | "full-access") =>
+        Effect.gen(function* () {
+          const requestLogPath = NodePath.join(tempDir, `${threadId}.ndjson`);
+          const argvLogPath = NodePath.join(tempDir, `${threadId}-argv.txt`);
+          yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+          const wrapperPath = yield* Effect.promise(() =>
+            makeProbeWrapper(requestLogPath, argvLogPath),
+          );
+          yield* serverSettings.updateSettings({
+            providers: { cursor: { binaryPath: wrapperPath } },
+          });
+          yield* adapter.startSession({
+            threadId: ThreadId.make(threadId),
+            provider: ProviderDriverKind.make("cursor"),
+            cwd: process.cwd(),
+            runtimeMode,
+            modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+          });
+          yield* adapter.stopSession(ThreadId.make(threadId));
+          return yield* Effect.promise(() => readJsonLines(requestLogPath));
+        });
+
+      const approvalRequests = yield* startWithMode(
+        "cursor-approval-required-mode-probe",
+        "approval-required",
+      );
+      const fullAccessRequests = yield* startWithMode(
+        "cursor-full-access-mode-probe",
+        "full-access",
+      );
+
+      assert.equal(lastSetModeId(approvalRequests), "ask");
+      assert.equal(lastSetModeId(fullAccessRequests), "code");
     }),
   );
 

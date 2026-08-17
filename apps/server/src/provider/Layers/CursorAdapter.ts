@@ -84,6 +84,16 @@ const CURSOR_RESUME_VERSION = 1 as const;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
+/**
+ * Cursor CLI `approvalMode` is `allowlist` | `auto-review` | `unrestricted`
+ * (https://cursor.com/docs/cli/reference/configuration). Public ACP session
+ * modes are `agent` | `plan` | `ask`; this repo's Cursor ACP schemas do not
+ * enum mode ids (`SessionMode.id` is a string). `auto-review` is the documented
+ * Cursor approvalMode that matches Codex `approvalsReviewer=auto_review`.
+ * Only select it when the agent advertises that id/name — no implement/yolo
+ * fallback.
+ */
+export const ACP_AUTO_REVIEW_MODE_ALIASES = ["auto-review"] as const;
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -214,7 +224,7 @@ function isPlanMode(mode: AcpSessionMode): boolean {
   return findModeByAliases([mode], ACP_PLAN_MODE_ALIASES) !== undefined;
 }
 
-function resolveRequestedModeId(input: {
+export function resolveRequestedModeId(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly runtimeMode: RuntimeMode;
   readonly modeState: AcpSessionModeState | undefined;
@@ -235,6 +245,13 @@ function resolveRequestedModeId(input: {
       modeState.availableModes.find((mode) => !isPlanMode(mode))?.id ??
       modeState.currentModeId
     );
+  }
+
+  if (input.runtimeMode === "auto") {
+    // Codex "auto" is on-request + auto_review, not yolo. If Cursor does not
+    // advertise auto-review, leave the ACP mode unset rather than mapping to
+    // code/agent (implement) or auto-approving like full-access.
+    return findModeByAliases(modeState.availableModes, ACP_AUTO_REVIEW_MODE_ALIASES)?.id;
   }
 
   return (
@@ -672,6 +689,9 @@ export function makeCursorAdapter(
                     params,
                     "acp.jsonrpc",
                   );
+                  // full-access is unrestricted/yolo. "auto" is a reviewer
+                  // (ACP auto-review / Codex auto_review): leave requestPermission
+                  // for the classifier instead of auto-approving here.
                   if (input.runtimeMode === "full-access") {
                     const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
                     if (autoApprovedOptionId !== undefined) {

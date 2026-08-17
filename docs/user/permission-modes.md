@@ -16,9 +16,9 @@ wants to run or edit, and waits for approval. Work outside the workspace is rest
 without prompting; commands and anything else still stop for approval.
 
 **Auto**: routine actions proceed without you; risky ones still ask. How this is enforced depends
-on the provider: Codex delegates routine approvals to an AI reviewer, Claude uses its own auto
-permission mode, and providers without an equivalent (such as OpenCode) fall back to asking, like
-Supervised.
+on the provider: Codex delegates routine approvals to an AI reviewer, Cursor uses its auto-review
+classifier, Claude uses its own auto permission mode, and providers without an equivalent (such as
+OpenCode) fall back to asking, like Supervised.
 
 **Full access**: allow commands and edits without prompts. The default. The agent runs
 unattended until it finishes or asks a question of its own.

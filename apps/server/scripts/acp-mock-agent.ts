@@ -265,6 +265,11 @@ const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
     description: "Design and plan software systems without implementation",
   },
   {
+    id: "auto-review",
+    name: "Auto-review",
+    description: "Allowlisted and sandboxed calls run; a classifier reviews the rest",
+  },
+  {
     id: "code",
     name: "Code",
     description: "Write and modify code with full tool access",
