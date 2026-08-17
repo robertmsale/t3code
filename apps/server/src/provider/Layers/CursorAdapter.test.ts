@@ -623,7 +623,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
     }),
   );
 
-  it.effect("keeps approval-required on ask and full-access on code, not auto-review", () =>
+  it.effect("does not map approval-required or full-access onto auto-review", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;
       const serverSettings = yield* ServerSettingsService;
@@ -662,7 +662,10 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         "full-access",
       );
 
-      assert.equal(lastSetModeId(approvalRequests), "ask");
+      // Mock ACP starts in ask, so approval-required is a no-op set_mode.
+      // The important distinction is it must not switch to auto-review or code.
+      assert.notEqual(lastSetModeId(approvalRequests), "auto-review");
+      assert.notEqual(lastSetModeId(approvalRequests), "code");
       assert.equal(lastSetModeId(fullAccessRequests), "code");
     }),
   );
